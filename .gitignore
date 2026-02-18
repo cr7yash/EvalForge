@@ -1,0 +1,56 @@
+# Dependencies
+node_modules/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+wheels/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Next.js
+.next/
+out/
+
+# Database
+*.db
+*.sqlite3
+
+# Python
+*.egg
+*.whl
+.pytest_cache/
+.mypy_cache/
+htmlcov/
+.coverage
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+
+# ML model cache (downloaded on first run)
+.cache/
