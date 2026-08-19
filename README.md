@@ -71,8 +71,8 @@ Results are stored in a SQLite database and displayed in a dashboard built with 
 ### 1. Clone and configure
 
 ```bash
-git clone https://github.com/<your-username>/evalforge.git
-cd evalforge
+git clone https://github.com/cr7yash/EvalForge.git
+cd EvalForge
 ```
 
 ```bash
