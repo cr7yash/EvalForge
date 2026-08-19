@@ -8,8 +8,21 @@ export interface Evaluation {
   results?: EvaluationResults
   evaluators: string[]
   error?: string
+  warnings?: string[]
   created_at: string
   completed_at?: string
+}
+
+/** GET /evaluations/:id — includes the prompts and the model's replies. */
+export interface EvaluationDetail extends Evaluation {
+  examples: Array<{
+    id?: string
+    prompt: string
+    expected_output?: string
+    context?: string
+  }>
+  responses: string[]
+  config?: Record<string, unknown>
 }
 
 export interface EvaluationResults {
@@ -25,7 +38,9 @@ export interface EvaluatorResult {
   results: Array<{
     example_id: string
     metrics: Record<string, number>
+    details?: Record<string, number>
   }>
+  metadata?: Record<string, unknown> & { pricing_known?: boolean }
 }
 
 export interface Provider {

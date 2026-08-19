@@ -1,8 +1,10 @@
 'use client'
 
+import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { cn } from '@/lib/utils'
+import { evaluationsApi } from '@/lib/api'
 import {
   LayoutDashboard, FlaskConical, Database, Gauge, GitCompare, FileText, Settings
 } from 'lucide-react'
@@ -18,6 +20,31 @@ const navigation = [
 
 export function Sidebar() {
   const pathname = usePathname()
+  const [count, setCount] = useState<number | null>(null)
+  const [online, setOnline] = useState<boolean | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+
+    const poll = () =>
+      evaluationsApi
+        .list({ limit: 1 })
+        .then((res) => {
+          if (cancelled) return
+          setCount(res.data.total)
+          setOnline(true)
+        })
+        .catch(() => {
+          if (!cancelled) setOnline(false)
+        })
+
+    poll()
+    const id = setInterval(poll, 15000)
+    return () => {
+      cancelled = true
+      clearInterval(id)
+    }
+  }, [])
 
   return (
     <aside className="w-72 bg-white border-r border-gray-200 flex flex-col flex-shrink-0">
@@ -29,7 +56,7 @@ export function Sidebar() {
           </div>
           <div>
             <h1 className="text-xl font-bold text-slate-900">EvalForge</h1>
-            <p className="text-xs text-slate-500">v1.0.0</p>
+            <p className="text-xs text-slate-500">v1.1.0</p>
           </div>
         </div>
       </div>
@@ -64,14 +91,28 @@ export function Sidebar() {
         <div className="card p-4 bg-gradient-to-br from-slate-50 to-slate-100">
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs font-medium text-slate-600">API Status</span>
-            <span className="flex items-center gap-1.5 text-xs text-emerald-600">
-              <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse" />
-              Online
+            <span
+              className={cn(
+                'flex items-center gap-1.5 text-xs',
+                online === false ? 'text-red-600' : 'text-emerald-600'
+              )}
+            >
+              <div
+                className={cn(
+                  'w-1.5 h-1.5 rounded-full',
+                  online === false
+                    ? 'bg-red-500'
+                    : 'bg-emerald-500 animate-pulse'
+                )}
+              />
+              {online === null ? 'Checking' : online ? 'Online' : 'Offline'}
             </span>
           </div>
           <div className="flex items-center justify-between">
             <span className="text-xs font-medium text-slate-600">Evaluations</span>
-            <span className="text-sm font-bold text-slate-900">0</span>
+            <span className="text-sm font-bold text-slate-900">
+              {count === null ? '—' : count}
+            </span>
           </div>
         </div>
         <Link

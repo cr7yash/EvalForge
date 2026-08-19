@@ -12,9 +12,17 @@ class Settings(BaseSettings):
     # Redis (optional for MVP)
     redis_url: str | None = None
 
-    # LLM API Keys
+    # Portkey AI Gateway (primary LLM access path)
+    portkey_api_key: str | None = None
+    portkey_base_url: str = "https://api.portkey.ai/v1"
+
+    # Direct provider keys (optional fallbacks when Portkey is not configured)
     openai_api_key: str | None = None
     anthropic_api_key: str | None = None
+
+    # How many generation requests may be in flight at once. Bounded so a
+    # large dataset does not trip provider rate limits.
+    max_concurrent_requests: int = 8
 
     # API Settings
     api_title: str = "EvalForge API"

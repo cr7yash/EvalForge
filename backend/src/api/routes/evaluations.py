@@ -7,6 +7,7 @@ from ...models.evaluation import (
     Evaluation,
     EvaluationCreate,
     EvaluationResponse,
+    EvaluationDetail,
     EvaluationList,
     EvaluationStatus
 )
@@ -78,7 +79,7 @@ def list_evaluations(
     )
 
 
-@router.get("/{evaluation_id}", response_model=EvaluationResponse)
+@router.get("/{evaluation_id}", response_model=EvaluationDetail)
 def get_evaluation(
     evaluation_id: str,
     db: Session = Depends(get_db)
@@ -86,14 +87,15 @@ def get_evaluation(
     """
     Get a specific evaluation by ID.
 
-    Returns full evaluation results including all metrics.
+    Returns full evaluation results including all metrics, plus the prompts
+    that were sent and the responses the model returned.
     """
     evaluation = db.query(Evaluation).filter(Evaluation.id == evaluation_id).first()
 
     if not evaluation:
         raise HTTPException(status_code=404, detail="Evaluation not found")
 
-    return EvaluationResponse.model_validate(evaluation)
+    return EvaluationDetail.model_validate(evaluation)
 
 
 @router.delete("/{evaluation_id}", status_code=204)

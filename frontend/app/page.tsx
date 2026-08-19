@@ -1,7 +1,62 @@
+'use client'
+
+import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { FlaskConical, Activity, TrendingUp, DollarSign, Plus, ArrowRight } from 'lucide-react'
+import { evaluationsApi } from '@/lib/api'
+import { Evaluation } from '@/types/evaluation'
+
+interface Stats {
+  total: number
+  successRate: string
+  avgLatency: string
+  totalCost: string
+}
+
+const EMPTY: Stats = { total: 0, successRate: '0%', avgLatency: '0ms', totalCost: '$0.00' }
+
+function summarize(evaluations: Evaluation[]): Stats {
+  if (evaluations.length === 0) return EMPTY
+
+  const completed = evaluations.filter((e) => e.status === 'completed')
+
+  // Latency and cost only exist when those evaluators were selected, so
+  // average over the runs that actually reported them.
+  const latencies = completed
+    .map((e) => e.results?.performance?.aggregated_metrics?.mean_latency_ms)
+    .filter((v): v is number => typeof v === 'number')
+
+  const totalCost = completed.reduce(
+    (sum, e) => sum + (e.results?.cost?.aggregated_metrics?.total_cost_usd ?? 0),
+    0
+  )
+
+  const avgLatency = latencies.length
+    ? latencies.reduce((a, b) => a + b, 0) / latencies.length
+    : 0
+
+  return {
+    total: evaluations.length,
+    successRate: `${Math.round((completed.length / evaluations.length) * 100)}%`,
+    avgLatency: `${Math.round(avgLatency)}ms`,
+    totalCost: `$${totalCost.toFixed(totalCost > 0 && totalCost < 0.01 ? 4 : 2)}`,
+  }
+}
 
 export default function DashboardPage() {
+  const [stats, setStats] = useState<Stats>(EMPTY)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    evaluationsApi
+      .list({ limit: 100 })
+      .then((res) => setStats(summarize(res.data.evaluations)))
+      .catch((err) => console.error('Failed to load dashboard stats:', err))
+      .finally(() => setLoading(false))
+  }, [])
+
+  const show = (value: string | number) => (loading ? '—' : String(value))
+
   return (
     <div className="min-h-screen">
       <div className="max-w-7xl mx-auto px-6 py-8 space-y-8">
@@ -23,25 +78,25 @@ export default function DashboardPage() {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
           <StatCard
             title="Total Evaluations"
-            value="0"
+            value={show(stats.total)}
             icon={FlaskConical}
             gradient="from-blue-500 to-cyan-500"
           />
           <StatCard
             title="Success Rate"
-            value="0%"
+            value={show(stats.successRate)}
             icon={TrendingUp}
             gradient="from-green-500 to-emerald-500"
           />
           <StatCard
             title="Avg Response Time"
-            value="0ms"
+            value={show(stats.avgLatency)}
             icon={Activity}
             gradient="from-purple-500 to-pink-500"
           />
           <StatCard
             title="Total Cost"
-            value="$0.00"
+            value={show(stats.totalCost)}
             icon={DollarSign}
             gradient="from-orange-500 to-red-500"
           />
