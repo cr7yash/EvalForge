@@ -36,6 +36,7 @@ class Evaluation(Base):
     evaluators = Column(JSON)  # List of evaluator names
     config = Column(JSON)  # Generation config
     error = Column(Text, nullable=True)
+    warnings = Column(JSON, nullable=True)  # Non-fatal generation issues
 
     # Timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -66,11 +67,23 @@ class EvaluationResponse(BaseModel):
     results: Dict[str, Any] | None = None
     evaluators: List[str]
     error: str | None = None
+    warnings: List[str] | None = None
     created_at: datetime
     completed_at: datetime | None = None
 
     class Config:
         from_attributes = True
+
+
+class EvaluationDetail(EvaluationResponse):
+    """
+    Single-evaluation response, including the prompts and what the model
+    replied. Kept out of the list schema so listing many evaluations does not
+    ship every prompt and response body.
+    """
+    examples: List[Dict[str, Any]] = Field(default_factory=list)
+    responses: List[str] = Field(default_factory=list)
+    config: Dict[str, Any] | None = None
 
 
 class EvaluationList(BaseModel):

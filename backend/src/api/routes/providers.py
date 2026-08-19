@@ -43,7 +43,11 @@ def list_evaluators():
         {
             "id": "cost",
             "name": "Cost",
-            "description": "Calculates token usage and cost metrics",
-            "metrics": ["total_cost_usd", "cost_per_1k_tokens", "cost_per_example"]
+            "description": "Breaks down token usage and spend across input and output tokens",
+            "metrics": [
+                "total_cost_usd", "input_cost_usd", "output_cost_usd",
+                "cost_per_1k_tokens", "cost_per_example",
+                "input_tokens", "output_tokens", "total_tokens"
+            ]
         }
     ]

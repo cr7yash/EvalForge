@@ -3,16 +3,17 @@
 import { useEffect, useState } from 'react'
 import { useParams } from 'next/navigation'
 import { evaluationsApi } from '@/lib/api'
-import { Evaluation } from '@/types/evaluation'
+import { EvaluationDetail } from '@/types/evaluation'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert'
 import { ArrowLeft } from 'lucide-react'
 import Link from 'next/link'
 
 export default function EvaluationDetailPage() {
   const params = useParams()
-  const [evaluation, setEvaluation] = useState<Evaluation | null>(null)
+  const [evaluation, setEvaluation] = useState<EvaluationDetail | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -54,6 +55,10 @@ export default function EvaluationDetailPage() {
     )
   }
 
+  const costPerExample = new Map(
+    (evaluation.results?.cost?.results ?? []).map((r) => [r.example_id, r.metrics])
+  )
+
   const getStatusVariant = (status: string): "default" | "success" | "warning" | "error" => {
     switch (status) {
       case 'completed': return 'success'
@@ -91,6 +96,28 @@ export default function EvaluationDetailPage() {
             <p className="text-red-800 font-medium">Error: {evaluation.error}</p>
           </CardContent>
         </Card>
+      )}
+
+      {/* Generation warnings — these explain scores that would otherwise
+          look like plain model failures (empty or truncated responses). */}
+      {evaluation.warnings && evaluation.warnings.length > 0 && (
+        <Alert variant="warning">
+          <AlertTitle>
+            {evaluation.warnings.length} example
+            {evaluation.warnings.length === 1 ? '' : 's'} had generation issues
+          </AlertTitle>
+          <AlertDescription>
+            <p className="mb-2">
+              Scores for these examples reflect an incomplete response, not
+              necessarily a wrong answer.
+            </p>
+            <ul className="list-disc list-inside space-y-1">
+              {evaluation.warnings.map((warning, i) => (
+                <li key={i}>{warning}</li>
+              ))}
+            </ul>
+          </AlertDescription>
+        </Alert>
       )}
 
       {/* Results */}
@@ -142,19 +169,25 @@ export default function EvaluationDetailPage() {
           {evaluation.results.cost && (
             <Card>
               <CardHeader>
-                <CardTitle>Cost Metrics</CardTitle>
+                <CardTitle>Cost &amp; Tokens</CardTitle>
               </CardHeader>
               <CardContent className="space-y-3">
                 {Object.entries(evaluation.results.cost.aggregated_metrics).map(([key, value]) => (
                   <div key={key} className="flex justify-between">
                     <span className="text-sm text-gray-600 capitalize">
-                      {key.replace(/_/g, ' ')}
+                      {key.replace(/_usd$/, '').replace(/_/g, ' ')}
                     </span>
                     <span className="text-sm font-semibold text-gray-900">
-                      ${value.toFixed(4)}
+                      {formatCostMetric(key, value)}
                     </span>
                   </div>
                 ))}
+                {evaluation.results.cost.metadata?.pricing_known === false && (
+                  <p className="text-xs text-amber-700 pt-2 border-t">
+                    No list price on record for this model — token counts are
+                    accurate, dollar figures are not.
+                  </p>
+                )}
               </CardContent>
             </Card>
           )}
@@ -197,6 +230,83 @@ export default function EvaluationDetailPage() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Prompts and what the model actually replied */}
+      {evaluation.examples?.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Prompts &amp; Responses</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {evaluation.examples.map((example, i) => {
+              const response = evaluation.responses?.[i]
+              return (
+                <div key={example.id ?? i} className="border rounded-lg p-4 space-y-3">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <Badge variant="default">#{example.id ?? i + 1}</Badge>
+                    {(() => {
+                      const m = costPerExample.get(String(example.id ?? i))
+                      if (!m) return null
+                      return (
+                        <span className="text-xs text-gray-500">
+                          {m.input_tokens} in · {m.output_tokens} out ·{' '}
+                          {m.total_tokens} tokens
+                          {m.cost_usd > 0 && ` · $${m.cost_usd.toFixed(6)}`}
+                        </span>
+                      )
+                    })()}
+                  </div>
+
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-1">
+                      Prompt
+                    </p>
+                    <p className="text-sm text-gray-900 whitespace-pre-wrap">
+                      {example.prompt}
+                    </p>
+                  </div>
+
+                  {example.expected_output && (
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-1">
+                        Expected
+                      </p>
+                      <p className="text-sm text-gray-700 whitespace-pre-wrap">
+                        {example.expected_output}
+                      </p>
+                    </div>
+                  )}
+
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-1">
+                      Response
+                    </p>
+                    {response ? (
+                      <p className="text-sm text-gray-900 whitespace-pre-wrap">
+                        {response}
+                      </p>
+                    ) : (
+                      <p className="text-sm italic text-amber-700">
+                        No text returned
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
+          </CardContent>
+        </Card>
+      )}
     </div>
   )
+}
+
+/**
+ * The cost evaluator reports both dollar amounts and raw token counts, so
+ * formatting has to follow the metric rather than assume currency.
+ */
+function formatCostMetric(key: string, value: number): string {
+  if (key.endsWith('_tokens')) return value.toLocaleString()
+  if (key === 'cost_per_1k_tokens') return `$${value.toFixed(4)}`
+  return `$${value.toFixed(6)}`
 }

@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 from typing import List, Dict, Any
 from datetime import datetime
@@ -5,6 +6,8 @@ from datetime import datetime
 from ..providers.base import LLMProvider, GenerationConfig, GenerationResult
 from ..providers.openai_provider import OpenAIProvider
 from ..providers.anthropic_provider import AnthropicProvider
+from ..providers.portkey_provider import PortkeyProvider
+from ..providers.portkey_catalog import FAMILY_LABELS, families, models_for_family
 from ..evaluators.base import EvalExample, BaseEvaluator
 from ..evaluators.accuracy import AccuracyEvaluator
 from ..evaluators.performance import PerformanceEvaluator
@@ -24,13 +27,25 @@ class EvaluationService:
     def _get_provider(self, provider_name: str) -> LLMProvider:
         """Get or create provider instance."""
         if provider_name not in self._providers:
-            if provider_name == "openai":
+            # Portkey vendor families are the primary path. The "-direct" ids
+            # bypass the gateway and need their own vendor API key.
+            if provider_name in FAMILY_LABELS and self.settings.portkey_api_key:
+                self._providers[provider_name] = PortkeyProvider(
+                    family=provider_name,
+                    api_key=self.settings.portkey_api_key,
+                    base_url=self.settings.portkey_base_url,
+                )
+            elif provider_name == "openai-direct":
                 self._providers[provider_name] = OpenAIProvider(
                     api_key=self.settings.openai_api_key
                 )
-            elif provider_name == "anthropic":
+            elif provider_name == "anthropic-direct":
                 self._providers[provider_name] = AnthropicProvider(
                     api_key=self.settings.anthropic_api_key
+                )
+            elif provider_name in FAMILY_LABELS:
+                raise ValueError(
+                    f"Provider '{provider_name}' requires PORTKEY_API_KEY to be set"
                 )
             else:
                 raise ValueError(f"Unknown provider: {provider_name}")
@@ -49,6 +64,73 @@ class EvaluationService:
             else:
                 raise ValueError(f"Unknown evaluator: {evaluator_name}")
         return self._evaluators[key]
+
+    async def _generate_all(
+        self,
+        provider: LLMProvider,
+        model: str,
+        config: GenerationConfig,
+        eval_examples: List[EvalExample],
+        evaluation: Evaluation,
+    ) -> List[GenerationResult]:
+        """
+        Generate a response for every example concurrently.
+
+        Requests are bounded by a semaphore so a large dataset does not open
+        hundreds of simultaneous connections and trip provider rate limits.
+        ``asyncio.gather`` preserves input order, so results stay aligned with
+        their examples regardless of completion order.
+        """
+        semaphore = asyncio.Semaphore(self.settings.max_concurrent_requests)
+        total = len(eval_examples)
+        completed = 0
+
+        async def generate_one(example: EvalExample) -> GenerationResult:
+            nonlocal completed
+            async with semaphore:
+                result = await provider.generate(
+                    prompt=example.prompt,
+                    model=model,
+                    config=config
+                )
+            completed += 1
+            evaluation.progress = completed / total * 0.7  # 70% for generation
+            return result
+
+        return await asyncio.gather(
+            *(generate_one(example) for example in eval_examples)
+        )
+
+    @staticmethod
+    def _collect_warnings(
+        eval_examples: List[EvalExample],
+        generation_results: List[GenerationResult],
+    ) -> List[str]:
+        """
+        Flag generations that cannot be scored meaningfully.
+
+        An empty or truncated response scores as a zero on accuracy, which is
+        indistinguishable from a genuinely wrong answer. Recording why keeps a
+        token-budget problem from being read as poor model quality.
+        """
+        warnings: List[str] = []
+        for example, result in zip(eval_examples, generation_results):
+            if result.is_empty:
+                detail = (
+                    f" — all {result.reasoning_tokens} output tokens went to "
+                    f"reasoning; raise max_tokens"
+                    if result.reasoning_tokens
+                    else ""
+                )
+                warnings.append(
+                    f"Example {example.id}: model returned no text{detail}"
+                )
+            elif result.truncated:
+                warnings.append(
+                    f"Example {example.id}: response was cut off at the "
+                    f"token limit ({result.output_tokens} tokens)"
+                )
+        return warnings
 
     async def run_evaluation(
         self,
@@ -104,23 +186,16 @@ class EvaluationService:
             provider = self._get_provider(provider_name)
             config = GenerationConfig(**config_dict) if config_dict else GenerationConfig()
 
-            # Generate responses
-            responses: List[str] = []
-            generation_results: List[GenerationResult] = []
-
-            for i, example in enumerate(eval_examples):
-                result = await provider.generate(
-                    prompt=example.prompt,
-                    model=model,
-                    config=config
-                )
-                responses.append(result.text)
-                generation_results.append(result)
-
-                # Update progress
-                evaluation.progress = (i + 1) / len(eval_examples) * 0.7  # 70% for generation
+            # Generate responses concurrently
+            generation_results = await self._generate_all(
+                provider, model, config, eval_examples, evaluation
+            )
+            responses = [r.text for r in generation_results]
 
             evaluation.responses = responses
+            evaluation.warnings = self._collect_warnings(
+                eval_examples, generation_results
+            ) or None
 
             # Run evaluators
             evaluator_results = {}
@@ -154,19 +229,29 @@ class EvaluationService:
         """Get list of available providers and their models."""
         providers = []
 
+        # Portkey exposes every vendor family behind one gateway key.
+        if self.settings.portkey_api_key:
+            for family in families():
+                providers.append({
+                    "id": family,
+                    "name": FAMILY_LABELS[family],
+                    "models": [s.slug for s in models_for_family(family)]
+                })
+
+        # Direct vendor access, only when explicitly configured.
         if self.settings.openai_api_key:
             openai = OpenAIProvider(api_key=self.settings.openai_api_key)
             providers.append({
-                "id": "openai",
-                "name": "OpenAI",
+                "id": "openai-direct",
+                "name": "OpenAI (direct)",
                 "models": openai.available_models
             })
 
         if self.settings.anthropic_api_key:
             anthropic = AnthropicProvider(api_key=self.settings.anthropic_api_key)
             providers.append({
-                "id": "anthropic",
-                "name": "Anthropic",
+                "id": "anthropic-direct",
+                "name": "Anthropic (direct)",
                 "models": anthropic.available_models
             })
 

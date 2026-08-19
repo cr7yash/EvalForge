@@ -12,13 +12,13 @@
 
 ## What It Does
 
-EvalForge lets you run standardized evaluations against OpenAI and Anthropic models, computing **13 metrics across 3 dimensions** with a single API call:
+EvalForge lets you run standardized evaluations against **46 models** from OpenAI, Anthropic, Google, Mistral and others — all reached through a single [Portkey](https://portkey.ai) gateway key — computing **18 metrics across 3 dimensions** with a single API call:
 
 | Dimension | Metrics |
 |-----------|---------|
 | **Accuracy** | Exact match, Semantic similarity (sentence embeddings), BLEU, ROUGE-L, F1 |
-| **Performance** | Mean latency, P50 / P95 / P99 latency, Tokens per second |
-| **Cost** | Total cost (USD), Cost per 1K tokens, Cost per example |
+| **Performance** | Mean latency, 3 latency percentiles (P50 / P95 / P99), Tokens per second |
+| **Cost** | Total / input / output cost (USD), Cost per 1K tokens, Cost per example, Input / output / total tokens |
 
 Results are stored in a SQLite database and displayed in a dashboard built with Next.js, Tailwind CSS, and shadcn/ui.
 
@@ -37,17 +37,22 @@ Results are stored in a SQLite database and displayed in a dashboard built with 
 │   Providers · Evaluators · Services · Routes         │
 └────────┬───────────────┬────────────────────────────┘
          │               │
-    ┌────▼────┐    ┌─────▼─────┐
-    │ OpenAI  │    │ Anthropic │    ← LLM Providers
-    │ GPT-4o  │    │ Claude    │
-    └─────────┘    └───────────┘
+         ┌────────▼─────────┐
+         │  Portkey Gateway  │        ← one key, OpenAI-compatible
+         └────────┬─────────┘
+    ┌─────────┬───┴────┬──────────┐
+    │ OpenAI  │ Claude │ Gemini · │    ← vendor families
+    │ GPT-5.x │ Opus 5 │ Mistral  │
+    └─────────┴────────┴──────────┘
 ```
 
 ### Key Design Decisions
 
-- **Pluggable providers** — Abstract `LLMProvider` base class; adding a new provider is one file
+- **One gateway, many vendors** — Portkey speaks the OpenAI protocol for every upstream provider, so a single client covers all of them
+- **Per-model request shaping** — Parameter support is not uniform across models (reasoning models reject `max_tokens`, `temperature` and `stop`), so each model declares its capabilities in `portkey_catalog.py` and requests are built to match
+- **Pluggable providers** — Abstract `LLMProvider` base class; direct OpenAI/Anthropic access remains available as a fallback
 - **Independent evaluators** — Each metric dimension (accuracy, performance, cost) runs in isolation via `BaseEvaluator`
-- **Async throughout** — All LLM calls use async clients for concurrent evaluation
+- **Concurrent generation** — Examples are generated in parallel via `asyncio.gather`, bounded by a semaphore (`MAX_CONCURRENT_REQUESTS`, default 8) so large datasets don't trip provider rate limits. Results stay aligned to their examples regardless of completion order
 - **Type-safe end-to-end** — Pydantic models on backend, TypeScript interfaces on frontend
 
 ---
@@ -61,7 +66,7 @@ Results are stored in a SQLite database and displayed in a dashboard built with 
 | Python | 3.12+ | [python.org](https://www.python.org/downloads/) |
 | Node.js | 18+ | [nodejs.org](https://nodejs.org/) |
 | uv | latest | `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
-| API key | — | [OpenAI](https://platform.openai.com/api-keys) and/or [Anthropic](https://console.anthropic.com/) |
+| API key | — | [Portkey](https://portkey.ai) (one key covers every model) |
 
 ### 1. Clone and configure
 
@@ -73,7 +78,13 @@ cd evalforge
 ```bash
 # Backend environment
 cp backend/.env.example backend/.env
-# Edit backend/.env and add your API key(s):
+# Edit backend/.env and add your gateway key:
+#   PORTKEY_API_KEY=...
+#
+# Optional — tune generation concurrency (default 8):
+#   MAX_CONCURRENT_REQUESTS=8
+#
+# Optional — only to bypass the gateway and call a vendor directly:
 #   OPENAI_API_KEY=sk-...
 #   ANTHROPIC_API_KEY=sk-ant-...
 ```
@@ -112,7 +123,7 @@ Open **http://localhost:3000** in your browser.
 ### Running an Evaluation
 
 1. Navigate to **Evaluations > New Evaluation**
-2. Pick a provider and model (e.g. OpenAI / `gpt-4o-mini`)
+2. Pick a provider and model (e.g. OpenAI / `gpt-5.5`, or Anthropic / `claude-opus-5`)
 3. Add test examples with prompts and expected outputs
 4. Select evaluators (Accuracy, Performance, Cost)
 5. Click **Start Evaluation** — results appear in seconds
@@ -123,9 +134,9 @@ Open **http://localhost:3000** in your browser.
 curl -X POST http://localhost:8000/api/v1/evaluations \
   -H "Content-Type: application/json" \
   -d '{
-    "name": "GPT-4o Mini Accuracy Test",
+    "name": "GPT-5.5 Accuracy Test",
     "provider": "openai",
-    "model": "gpt-4o-mini",
+    "model": "gpt-5.5",
     "evaluators": ["accuracy", "performance", "cost"],
     "examples": [
       {"prompt": "What is the capital of France?", "expected_output": "Paris"},
@@ -156,7 +167,9 @@ evalforge/
 │   ├── src/
 │   │   ├── providers/          # LLM provider abstraction
 │   │   │   ├── base.py         #   Abstract LLMProvider + GenerationResult
-│   │   │   ├── openai_provider.py
+│   │   │   ├── portkey_catalog.py  # Model catalog + per-model param support
+│   │   │   ├── portkey_provider.py # Gateway provider (primary)
+│   │   │   ├── openai_provider.py  # Direct access (optional fallback)
 │   │   │   └── anthropic_provider.py
 │   │   ├── evaluators/         # Metric computation
 │   │   │   ├── base.py         #   Abstract BaseEvaluator + EvalExample
@@ -164,7 +177,7 @@ evalforge/
 │   │   │   ├── performance.py  #   Latency percentiles, throughput
 │   │   │   └── cost.py         #   Token cost analysis
 │   │   ├── services/           # Orchestration
-│   │   │   └── eval_service.py #   Runs providers → evaluators pipeline
+│   │   │   └── eval_service.py #   Concurrent generation → evaluators pipeline
 │   │   ├── models/             # SQLAlchemy ORM + Pydantic schemas
 │   │   ├── api/                # FastAPI routes + CORS
 │   │   └── core/               # Config + database setup
@@ -218,10 +231,26 @@ evalforge/
 
 ## Supported Models
 
-| Provider | Models | Pricing (per 1K tokens) |
-|----------|--------|------------------------|
-| **OpenAI** | gpt-4o, gpt-4o-mini, gpt-4-turbo | $0.005–$0.03 output |
-| **Anthropic** | claude-sonnet-4, claude-3.5-sonnet, claude-3.5-haiku | $0.004–$0.015 output |
+46 models are reachable through the Portkey gateway, grouped by vendor family.
+`GET /api/v1/providers` returns the live list.
+
+| Family | Count | Examples |
+|--------|-------|----------|
+| **OpenAI** | 19 | `gpt-5.5`, `gpt-5.6-sol`, `gpt-4.1`, `gpt-4o-mini`, `o4-mini` |
+| **Anthropic** | 10 | `claude-opus-5`, `claude-sonnet-5`, `claude-opus-4-8`, `claude-haiku-4-5` |
+| **Google** | 11 | `gemini-3.7-flash`, `gemini-2.5-pro`, `gemma-4-31b` |
+| **Mistral** | 3 | `mistral-large-3`, `mixtral-8x7b` |
+| **Other** | 3 | `deepseek-r1`, `kimi-k2.5` |
+
+**Pricing** is recorded for the mainstream models only. Where a public list
+price is not known, the Cost evaluator reports `pricing_known: false` and its
+dollar figures should be ignored — token counts remain accurate.
+
+**Reasoning models** (`gpt-5.x`, `o3`/`o4`, `gemini-3.x`, `deepseek-r1`) spend
+their output budget on hidden reasoning before writing an answer. EvalForge
+raises the token budget to a safe floor for these models automatically; any
+response that still comes back empty or truncated is flagged on the
+evaluation rather than silently scored as a zero.
 
 ---
 
@@ -232,7 +261,7 @@ evalforge/
 | Backend | FastAPI, SQLAlchemy, Pydantic, uvicorn |
 | Frontend | Next.js 15, React 19, TypeScript, Tailwind CSS, shadcn/ui |
 | NLP | sentence-transformers, NLTK (BLEU), rouge-score, scikit-learn |
-| LLM SDKs | openai, anthropic |
+| LLM access | Portkey AI gateway (via the `openai` SDK); `anthropic` for direct fallback |
 | HTTP | Axios (frontend), httpx (backend) |
 
 ---
@@ -242,8 +271,21 @@ evalforge/
 **Backend won't start — "No module named 'src'"**
 Make sure you're in the `backend/` directory and using `uv run`.
 
-**"API key not found"**
-Check that `backend/.env` exists and contains at least one valid key without quotes.
+**"API key not found" / no providers listed**
+Check that `backend/.env` exists and contains `PORTKEY_API_KEY` without quotes.
+`GET /api/v1/providers` returns an empty list when no key is configured.
+
+**"no such column: evaluations.warnings"**
+An older database predates the `warnings` column. Delete `backend/evalforge.db`
+and restart; the schema is recreated on startup.
+
+**Rate limit errors (429) on large datasets**
+Lower `MAX_CONCURRENT_REQUESTS` in `backend/.env`; it defaults to 8 in-flight
+requests.
+
+**A model returns empty responses**
+Reasoning models can exhaust the output budget before emitting text. Raise
+`max_tokens` in the evaluation config, or lower `reasoning_effort`.
 
 **Frontend can't reach backend**
 Verify the backend is running on port 8000 and `frontend/.env.local` has `NEXT_PUBLIC_API_URL=http://localhost:8000/api/v1`.
