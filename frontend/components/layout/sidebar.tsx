@@ -56,7 +56,7 @@ export function Sidebar() {
           </div>
           <div>
             <h1 className="text-xl font-bold text-slate-900">EvalForge</h1>
-            <p className="text-xs text-slate-500">v1.2.0</p>
+            <p className="text-xs text-slate-500">v1.2.1</p>
           </div>
         </div>
       </div>

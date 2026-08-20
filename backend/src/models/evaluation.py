@@ -152,6 +152,15 @@ class ComparisonEvaluation(EvaluationResponse):
     """
     responses: List[str] = Field(default_factory=list)
 
+    @field_validator("responses", mode="before")
+    @classmethod
+    def none_becomes_empty(cls, v):
+        # A pending or running evaluation has no responses yet and stores
+        # NULL. default_factory only applies when the key is missing, not
+        # when it is present and None, so coerce it here -- otherwise every
+        # comparison 500s at creation time, before any model has replied.
+        return [] if v is None else v
+
 
 class ComparisonSummary(BaseModel):
     """Schema for a comparison in list views."""
