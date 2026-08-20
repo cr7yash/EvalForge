@@ -1,6 +1,6 @@
 import asyncio
 import uuid
-from typing import List, Dict, Any
+from typing import Callable, List, Dict, Any
 from datetime import datetime
 
 from ..providers.base import LLMProvider, GenerationConfig, GenerationResult
@@ -72,6 +72,8 @@ class EvaluationService:
         config: GenerationConfig,
         eval_examples: List[EvalExample],
         evaluation: Evaluation,
+        semaphore: asyncio.Semaphore | None = None,
+        on_progress: Callable[[], None] | None = None,
     ) -> List[GenerationResult]:
         """
         Generate a response for every example concurrently.
@@ -80,8 +82,14 @@ class EvaluationService:
         hundreds of simultaneous connections and trip provider rate limits.
         ``asyncio.gather`` preserves input order, so results stay aligned with
         their examples regardless of completion order.
+
+        A caller running several evaluations at once (comparisons) passes its
+        own semaphore so the bound applies across all of them combined,
+        rather than once per evaluation, and its own ``on_progress`` to
+        persist progress after each example (e.g. to a DB session that a
+        background task owns, for polling clients to observe).
         """
-        semaphore = asyncio.Semaphore(self.settings.max_concurrent_requests)
+        semaphore = semaphore or asyncio.Semaphore(self.settings.max_concurrent_requests)
         total = len(eval_examples)
         completed = 0
 
@@ -95,6 +103,8 @@ class EvaluationService:
                 )
             completed += 1
             evaluation.progress = completed / total * 0.7  # 70% for generation
+            if on_progress:
+                on_progress()
             return result
 
         return await asyncio.gather(
@@ -132,6 +142,90 @@ class EvaluationService:
                 )
         return warnings
 
+    async def _execute(
+        self,
+        evaluation: Evaluation,
+        semaphore: asyncio.Semaphore | None = None,
+        on_progress: Callable[[], None] | None = None,
+    ) -> None:
+        """
+        Run generation and evaluators for one evaluation, mutating it in
+        place. Its inputs (examples, provider, model, evaluators, config) are
+        read off the row itself, so both a standalone run and one model
+        inside a comparison share this path.
+
+        ``semaphore`` and ``on_progress`` let a caller running several
+        evaluations concurrently (comparisons) share one rate limit across
+        all of them and persist progress as it happens.
+        """
+        evaluation.status = EvaluationStatus.RUNNING
+        try:
+            # Parse examples
+            eval_examples = [
+                EvalExample(
+                    id=ex.get("id", str(i)),
+                    prompt=ex["prompt"],
+                    expected_output=ex.get("expected_output"),
+                    context=ex.get("context"),
+                    metadata=ex.get("metadata", {})
+                )
+                for i, ex in enumerate(evaluation.examples)
+            ]
+
+            # Get provider and config
+            provider = self._get_provider(evaluation.provider)
+            config = (
+                GenerationConfig(**evaluation.config) if evaluation.config
+                else GenerationConfig()
+            )
+
+            # Generate responses concurrently
+            generation_results = await self._generate_all(
+                provider, evaluation.model, config, eval_examples, evaluation,
+                semaphore=semaphore, on_progress=on_progress,
+            )
+            responses = [r.text for r in generation_results]
+
+            evaluation.responses = responses
+            evaluation.warnings = self._collect_warnings(
+                eval_examples, generation_results
+            ) or None
+
+            # Run evaluators
+            evaluator_results = {}
+            evaluator_names = evaluation.evaluators or []
+            for i, evaluator_name in enumerate(evaluator_names):
+                evaluator = self._get_evaluator(
+                    evaluator_name, provider, evaluation.model
+                )
+
+                result = await evaluator.evaluate(
+                    examples=eval_examples,
+                    responses=responses,
+                    generation_results=generation_results
+                )
+
+                evaluator_results[evaluator_name] = result.model_dump()
+
+                # Update progress
+                evaluation.progress = 0.7 + (i + 1) / len(evaluator_names) * 0.3
+                if on_progress:
+                    on_progress()
+
+            evaluation.results = evaluator_results
+            evaluation.status = EvaluationStatus.COMPLETED
+            evaluation.progress = 1.0
+            evaluation.completed_at = datetime.utcnow()
+            if on_progress:
+                on_progress()
+
+        except Exception as e:
+            evaluation.status = EvaluationStatus.FAILED
+            evaluation.error = str(e)
+            if on_progress:
+                on_progress()
+            raise
+
     async def run_evaluation(
         self,
         name: str,
@@ -155,74 +249,18 @@ class EvaluationService:
         Returns:
             Evaluation model with results
         """
-        # Create evaluation record
-        eval_id = str(uuid.uuid4())
         evaluation = Evaluation(
-            id=eval_id,
+            id=str(uuid.uuid4()),
             name=name,
             provider=provider_name,
             model=model,
             evaluators=evaluator_names,
             examples=examples,
             config=config_dict or {},
-            status=EvaluationStatus.RUNNING,
+            status=EvaluationStatus.PENDING,
             progress=0.0
         )
-
-        try:
-            # Parse examples
-            eval_examples = [
-                EvalExample(
-                    id=ex.get("id", str(i)),
-                    prompt=ex["prompt"],
-                    expected_output=ex.get("expected_output"),
-                    context=ex.get("context"),
-                    metadata=ex.get("metadata", {})
-                )
-                for i, ex in enumerate(examples)
-            ]
-
-            # Get provider and config
-            provider = self._get_provider(provider_name)
-            config = GenerationConfig(**config_dict) if config_dict else GenerationConfig()
-
-            # Generate responses concurrently
-            generation_results = await self._generate_all(
-                provider, model, config, eval_examples, evaluation
-            )
-            responses = [r.text for r in generation_results]
-
-            evaluation.responses = responses
-            evaluation.warnings = self._collect_warnings(
-                eval_examples, generation_results
-            ) or None
-
-            # Run evaluators
-            evaluator_results = {}
-            for i, evaluator_name in enumerate(evaluator_names):
-                evaluator = self._get_evaluator(evaluator_name, provider, model)
-
-                result = await evaluator.evaluate(
-                    examples=eval_examples,
-                    responses=responses,
-                    generation_results=generation_results
-                )
-
-                evaluator_results[evaluator_name] = result.model_dump()
-
-                # Update progress
-                evaluation.progress = 0.7 + (i + 1) / len(evaluator_names) * 0.3
-
-            evaluation.results = evaluator_results
-            evaluation.status = EvaluationStatus.COMPLETED
-            evaluation.progress = 1.0
-            evaluation.completed_at = datetime.utcnow()
-
-        except Exception as e:
-            evaluation.status = EvaluationStatus.FAILED
-            evaluation.error = str(e)
-            raise
-
+        await self._execute(evaluation)
         return evaluation
 
     def get_available_providers(self) -> List[Dict[str, Any]]:

@@ -21,6 +21,20 @@ export const evaluationsApi = {
     api.delete(`/evaluations/${id}`),
 }
 
+export const comparisonsApi = {
+  list: (params?: { skip?: number; limit?: number }) =>
+    api.get('/comparisons', { params }),
+
+  get: (id: string) =>
+    api.get(`/comparisons/${id}`),
+
+  create: (data: any) =>
+    api.post('/comparisons', data),
+
+  delete: (id: string) =>
+    api.delete(`/comparisons/${id}`),
+}
+
 export const providersApi = {
   list: () =>
     api.get('/providers'),

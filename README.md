@@ -275,9 +275,10 @@ Make sure you're in the `backend/` directory and using `uv run`.
 Check that `backend/.env` exists and contains `PORTKEY_API_KEY` without quotes.
 `GET /api/v1/providers` returns an empty list when no key is configured.
 
-**"no such column: evaluations.warnings"**
-An older database predates the `warnings` column. Delete `backend/evalforge.db`
-and restart; the schema is recreated on startup.
+**"no such column: ..." after pulling new changes**
+Restart the backend. New nullable columns and new tables are applied to your
+existing database automatically on startup, preserving stored evaluations —
+there is no need to delete `backend/evalforge.db`.
 
 **Rate limit errors (429) on large datasets**
 Lower `MAX_CONCURRENT_REQUESTS` in `backend/.env`; it defaults to 8 in-flight

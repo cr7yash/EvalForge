@@ -49,6 +49,36 @@ export interface Provider {
   models: string[]
 }
 
+export interface ComparisonModelSpec {
+  provider: string
+  model: string
+}
+
+/** One model's run inside a comparison, including what it replied. */
+export interface ComparisonEvaluation extends Evaluation {
+  responses: string[]
+}
+
+/** GET /comparisons/:id — polled while status is pending/running. */
+export interface ComparisonDetail {
+  id: string
+  name: string
+  status: 'pending' | 'running' | 'completed' | 'failed'
+  evaluators: string[]
+  error?: string
+  created_at: string
+  completed_at?: string
+  examples: Array<{
+    id?: string
+    prompt: string
+    expected_output?: string
+    context?: string
+  }>
+  evaluations: ComparisonEvaluation[]
+  /** metric name -> id of the winning evaluation, or null if no winner */
+  winners: Record<string, string | null>
+}
+
 export interface Evaluator {
   id: string
   name: string
