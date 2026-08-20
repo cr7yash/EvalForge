@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from ..core.config import get_settings
 from ..core.database import init_db
-from .routes import evaluations, providers
+from .routes import comparisons, evaluations, providers
 
 settings = get_settings()
 
@@ -24,6 +24,7 @@ app.add_middleware(
 
 # Include routers
 app.include_router(evaluations.router, prefix="/api/v1/evaluations", tags=["evaluations"])
+app.include_router(comparisons.router, prefix="/api/v1/comparisons", tags=["comparisons"])
 app.include_router(providers.router, prefix="/api/v1/providers", tags=["providers"])
 
 

@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert'
+import { formatCostMetric } from '@/lib/utils'
 import { ArrowLeft } from 'lucide-react'
 import Link from 'next/link'
 
@@ -299,14 +300,4 @@ export default function EvaluationDetailPage() {
       )}
     </div>
   )
-}
-
-/**
- * The cost evaluator reports both dollar amounts and raw token counts, so
- * formatting has to follow the metric rather than assume currency.
- */
-function formatCostMetric(key: string, value: number): string {
-  if (key.endsWith('_tokens')) return value.toLocaleString()
-  if (key === 'cost_per_1k_tokens') return `$${value.toFixed(4)}`
-  return `$${value.toFixed(6)}`
 }

@@ -1,6 +1,6 @@
 [project]
 name = "evalforge"
-version = "1.1.0"
+version = "1.2.0"
 description = "LLM Evaluation & Benchmarking Platform — measure accuracy, performance, and cost across language models"
 requires-python = ">=3.12"
 dependencies = [
